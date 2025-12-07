@@ -116,6 +116,34 @@ dpkg-reconfigure -f noninteractive slapd || true
 # Wait a moment for slapd to restart
 sleep 3
 
+# --- 4a. Enforce Admin Password & Config (Fix for potential debconf misses) ---
+log "Enforcing Admin Password and Root DN..."
+HASHED_ADMIN_PASS=$(slappasswd -s "$LDAP_ADMIN_PASS")
+
+# Identify the database DN (usually {1}mdb)
+# We assume the reconfigure set the suffix or we are working with the default logic.
+# If reconfigure didn't change suffix, we might have a mismatch, but let's try to set keys on the MDB.
+DATABASE_DN="olcDatabase={1}mdb,cn=config"
+
+# Check if mdb exists, if not try hdb (older debian/ubuntu)
+if ! ldapsearch -Y EXTERNAL -H ldapi:/// -b "cn=config" -s base "$DATABASE_DN" > /dev/null 2>&1; then
+    DATABASE_DN="olcDatabase={1}hdb,cn=config"
+fi
+
+cat <<EOF | ldapmodify -Y EXTERNAL -H ldapi:/// > /dev/null 2>&1 || log "Warning: Failed to enforce password via ldapi. If this is a fresh install, it might be fine."
+dn: $DATABASE_DN
+changetype: modify
+replace: olcRootPW
+olcRootPW: $HASHED_ADMIN_PASS
+-
+replace: olcRootDN
+olcRootDN: cn=admin,$LDAP_BASE_DN
+EOF
+
+log "Admin password enforcement attempted."
+systemctl restart slapd
+sleep 2
+
 # --- 5. Add Base OUs (People, Groups) ---
 log "Creating base Organizational Units (People, Groups)..."
 
